@@ -27,6 +27,54 @@
         </div>
       </div>
 
+      <!-- Restocking Orders Section (only shown when restocking orders exist) -->
+      <div v-if="restockingOrders.length > 0" class="card restocking-orders-card">
+        <div class="card-header">
+          <h3 class="card-title">Submitted Orders ({{ restockingOrders.length }})</h3>
+          <span class="restocking-badge">Internal Restock</span>
+        </div>
+        <div class="table-container">
+          <table class="orders-table">
+            <thead>
+              <tr>
+                <th class="col-order-number">{{ t('orders.table.orderNumber') }}</th>
+                <th class="col-items">{{ t('orders.table.items') }}</th>
+                <th class="col-status">{{ t('orders.table.status') }}</th>
+                <th class="col-date">{{ t('orders.table.orderDate') }}</th>
+                <th class="col-date">{{ t('orders.table.expectedDelivery') }}</th>
+                <th class="col-lead-time">Lead Time</th>
+                <th class="col-value">{{ t('orders.table.totalValue') }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="order in restockingOrders" :key="order.id">
+                <td class="col-order-number"><strong>{{ order.order_number }}</strong></td>
+                <td class="col-items">
+                  <details class="items-details">
+                    <summary class="items-summary">
+                      {{ t('orders.itemsCount', { count: order.items.length }) }}
+                    </summary>
+                    <div class="items-dropdown">
+                      <div v-for="(item, idx) in order.items" :key="idx" class="item-entry">
+                        <span class="item-name">{{ item.name }}</span>
+                        <span class="item-meta">{{ t('orders.quantity') }}: {{ item.quantity }} @ {{ currencySymbol }}{{ item.unit_price }}</span>
+                      </div>
+                    </div>
+                  </details>
+                </td>
+                <td class="col-status">
+                  <span class="badge restocking-status">{{ t('status.restocking') }}</span>
+                </td>
+                <td class="col-date">{{ formatDate(order.order_date) }}</td>
+                <td class="col-date">{{ formatDate(order.expected_delivery) }}</td>
+                <td class="col-lead-time lead-time-cell">{{ calculateLeadTime(order.order_date, order.expected_delivery) }}</td>
+                <td class="col-value"><strong>{{ currencySymbol }}{{ order.total_value.toLocaleString() }}</strong></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <div class="card">
         <div class="card-header">
           <h3 class="card-title">{{ t('orders.allOrders') }} ({{ orders.length }})</h3>
@@ -94,7 +142,7 @@ export default {
     })
     const loading = ref(true)
     const error = ref(null)
-    const orders = ref([])
+    const allOrdersRaw = ref([])
 
     // Use shared filters
     const {
@@ -105,18 +153,34 @@ export default {
       getCurrentFilters
     } = useFilters()
 
+    // Regular orders: excludes Restocking status, applies status filter client-side
+    const orders = computed(() => {
+      let result = allOrdersRaw.value.filter(o => o.status !== 'Restocking')
+      if (selectedStatus.value !== 'all') {
+        result = result.filter(o => o.status.toLowerCase() === selectedStatus.value.toLowerCase())
+      }
+      return result.sort((a, b) => new Date(a.order_date) - new Date(b.order_date))
+    })
+
+    // Restocking orders only — unaffected by the status filter dropdown
+    const restockingOrders = computed(() =>
+      allOrdersRaw.value
+        .filter(o => o.status === 'Restocking')
+        .sort((a, b) => new Date(b.order_date) - new Date(a.order_date))
+    )
+
     const loadOrders = async () => {
       try {
         loading.value = true
         const filters = getCurrentFilters()
-        const fetchedOrders = await api.getOrders(filters)
-
-        // Sort orders by order_date (earliest first)
-        orders.value = fetchedOrders.sort((a, b) => {
-          const dateA = new Date(a.order_date)
-          const dateB = new Date(b.order_date)
-          return dateA - dateB
+        // Omit status from API call so Restocking orders always come through;
+        // status filtering for regular orders is applied in the computed property above
+        const fetchedOrders = await api.getOrders({
+          warehouse: filters.warehouse,
+          category: filters.category,
+          month: filters.month
         })
+        allOrdersRaw.value = fetchedOrders
       } catch (err) {
         error.value = 'Failed to load orders: ' + err.message
       } finally {
@@ -153,6 +217,11 @@ export default {
       })
     }
 
+    const calculateLeadTime = (orderDate, expectedDelivery) => {
+      const days = Math.round((new Date(expectedDelivery) - new Date(orderDate)) / 86400000)
+      return isNaN(days) ? 'N/A' : `${days} days`
+    }
+
     onMounted(loadOrders)
 
     return {
@@ -160,9 +229,11 @@ export default {
       loading,
       error,
       orders,
+      restockingOrders,
       getOrdersByStatus,
       getOrderStatusClass,
       formatDate,
+      calculateLeadTime,
       currencySymbol,
       translateProductName,
       translateCustomerName
@@ -275,5 +346,34 @@ export default {
 .item-meta {
   font-size: 0.813rem;
   color: #64748b;
+}
+
+/* Restocking orders section */
+.restocking-orders-card {
+  border-left: 4px solid #7c3aed;
+  background: #faf5ff;
+}
+
+.restocking-badge {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: #ede9fe;
+  color: #5b21b6;
+}
+
+.badge.restocking-status {
+  background: #ede9fe;
+  color: #5b21b6;
+}
+
+.col-lead-time {
+  width: 110px;
+}
+
+.lead-time-cell {
+  font-weight: 600;
+  color: #7c3aed;
 }
 </style>
